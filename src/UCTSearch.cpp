@@ -31,6 +31,7 @@
 #include "UCTSearch.h"
 
 #include <boost/format.hpp>
+#include <boost/scope_exit.hpp>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -232,8 +233,14 @@ SearchResult UCTSearch::play_simulation(GameState & currstate,
                                         UCTNode* const node) {
     const auto color = currstate.get_to_move();
     auto result = SearchResult{};
+    auto new_node = false;
 
     node->virtual_loss();
+
+    // This will undo virtual loss even if something throws an exception.
+    BOOST_SCOPE_EXIT(node) {
+        node->virtual_loss_undo();
+    } BOOST_SCOPE_EXIT_END
 
     if (node->expandable()) {
         if (currstate.get_passes() >= 2) {
@@ -242,11 +249,15 @@ SearchResult UCTSearch::play_simulation(GameState & currstate,
         } else {
             float eval;
             const auto had_children = node->has_children();
+
+            // Careful: create_children() can throw a NetworkHaltException when
+            // another thread requests draining the search.
             const auto success =
                 node->create_children(m_network, m_nodes, currstate, eval,
                                       get_min_psa_ratio());
             if (!had_children && success) {
                 result = SearchResult::from_eval(eval);
+                new_node = true;
             }
         }
     }
@@ -263,10 +274,10 @@ SearchResult UCTSearch::play_simulation(GameState & currstate,
         }
     }
 
-    if (result.valid()) {
+    // New node was updated in create_children.
+    if (result.valid() && !new_node) {
         node->update(result.eval());
     }
-    node->virtual_loss_undo();
 
     return result;
 }
@@ -731,13 +742,17 @@ bool UCTSearch::stop_thinking(int elapsed_centis, int time_for_move) const {
 }
 
 void UCTWorker::operator()() {
-    do {
-        auto currstate = std::make_unique<GameState>(m_rootstate);
-        auto result = m_search->play_simulation(*currstate, m_root);
-        if (result.valid()) {
-            m_search->increment_playouts();
-        }
-    } while (m_search->is_running());
+    try {
+        do {
+            auto currstate = std::make_unique<GameState>(m_rootstate);
+            auto result = m_search->play_simulation(*currstate, m_root);
+            if (result.valid()) {
+                m_search->increment_playouts();
+            }
+        } while (m_search->is_running());
+    } catch (NetworkHaltException&) {
+        // intentionally empty
+    }
 }
 
 void UCTSearch::increment_playouts() {
@@ -769,7 +784,7 @@ int UCTSearch::think(int color, passflag_t passflag) {
     m_run = true;
     int cpus = cfg_num_threads;
     ThreadGroup tg(thread_pool);
-    for (int i = 1; i < cpus; i++) {
+    for (int i = 0; i < cpus; i++) {
         tg.add_task(UCTWorker(m_rootstate, this, m_root.get()));
     }
 
@@ -777,12 +792,7 @@ int UCTSearch::think(int color, passflag_t passflag) {
     auto last_update = 0;
     auto last_output = 0;
     do {
-        auto currstate = std::make_unique<GameState>(m_rootstate);
-
-        auto result = play_simulation(*currstate, m_root.get());
-        if (result.valid()) {
-            increment_playouts();
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
         Time elapsed;
         int elapsed_centis = Time::timediff_centis(start, elapsed);
@@ -811,7 +821,9 @@ int UCTSearch::think(int color, passflag_t passflag) {
 
     // Stop the search.
     m_run = false;
+    m_network.drain_evals();
     tg.wait_all();
+    m_network.resume_evals();
 
     // Reactivate all pruned root children.
     for (const auto& node : m_root->get_children()) {
@@ -878,18 +890,14 @@ void UCTSearch::ponder() {
 
     m_run = true;
     ThreadGroup tg(thread_pool);
-    for (auto i = size_t{1}; i < cfg_num_threads; i++) {
+    for (auto i = size_t{0}; i < cfg_num_threads; i++) {
         tg.add_task(UCTWorker(m_rootstate, this, m_root.get()));
     }
     Time start;
     auto keeprunning = true;
     auto last_output = 0;
     do {
-        auto currstate = std::make_unique<GameState>(m_rootstate);
-        auto result = play_simulation(*currstate, m_root.get());
-        if (result.valid()) {
-            increment_playouts();
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         if (cfg_analyze_tags.interval_centis()) {
             Time elapsed;
             int elapsed_centis = Time::timediff_centis(start, elapsed);
@@ -909,7 +917,9 @@ void UCTSearch::ponder() {
 
     // Stop the search.
     m_run = false;
+    m_network.drain_evals();
     tg.wait_all();
+    m_network.resume_evals();
 
     // Display search info.
     myprintf("\n");

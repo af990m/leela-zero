@@ -79,8 +79,14 @@ bool UCTNode::create_children(Network & network,
         return false;
     }
 
-    const auto raw_netlist = network.get_output(
-        &state, Network::Ensemble::RANDOM_SYMMETRY);
+    NNCache::Netresult raw_netlist;
+    try {
+        raw_netlist = network.get_output(
+            &state, Network::Ensemble::RANDOM_SYMMETRY);
+    } catch (NetworkHaltException&) {
+        expand_cancel();
+        throw;
+    }
 
     // DCNN returns winrate as side to move
     const auto stm_eval = raw_netlist.winrate;
@@ -110,7 +116,7 @@ bool UCTNode::create_children(Network & network,
     auto allow_pass = cfg_dumbpass;
 
     // Less than 20 available intersections in a 19x19 game.
-    if (nodelist.size() <= std::max(5, BOARD_SIZE)) {
+    if (int(nodelist.size()) <= std::max(5, BOARD_SIZE)) {
         allow_pass = true;
     }
 
@@ -143,6 +149,8 @@ bool UCTNode::create_children(Network & network,
     }
 
     link_nodelist(nodecount, nodelist, min_psa_ratio);
+    // Increment visit and assign eval.
+    update(eval);
     expand_done();
     return true;
 }
@@ -315,8 +323,8 @@ UCTNode* UCTNode::uct_select_child(int color, bool is_root) {
     const auto numerator = std::sqrt(double(parentvisits) *
             std::log(cfg_logpuct * double(parentvisits) + cfg_logconst));
     const auto fpu_reduction = (is_root ? cfg_fpu_root_reduction : cfg_fpu_reduction) * std::sqrt(total_visited_policy);
-    // Estimated eval for unknown nodes = original parent NN eval - reduction
-    const auto fpu_eval = get_net_eval(color) - fpu_reduction;
+    // Estimated eval for unknown nodes = parent (not NN) eval - reduction
+    const auto fpu_eval = get_raw_eval(color) - fpu_reduction;
 
     auto best = static_cast<UCTNodePointer*>(nullptr);
     auto best_value = std::numeric_limits<double>::lowest();
@@ -479,4 +487,3 @@ void UCTNode::wait_expanded() {
 #endif
     assert(v == ExpandState::EXPANDED);
 }
-

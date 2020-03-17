@@ -111,7 +111,7 @@ by adding -DUSE_CPU_ONLY=1 to the cmake command line.
     git submodule update --init --recursive
 
     # Install build depedencies
-    sudo apt install libboost-dev libboost-program-options-dev libboost-filesystem-dev opencl-headers ocl-icd-libopencl1 ocl-icd-opencl-dev zlib1g-dev
+    sudo apt install cmake g++ libboost-dev libboost-program-options-dev libboost-filesystem-dev opencl-headers ocl-icd-libopencl1 ocl-icd-opencl-dev zlib1g-dev
 
     # Use a stand alone build directory to keep source dir clean
     mkdir build && cd build
@@ -318,13 +318,13 @@ This requires a working installation of TensorFlow 1.4 or later:
     src/leelaz -w weights.txt
     dump_supervised bigsgf.sgf train.out
     exit
-    training/tf/parse.py train.out
+    training/tf/parse.py 6 128 train.out
 
-This will run and regularly dump Leela Zero weight files to disk, as
-well as snapshots of the learning state numbered by the batch number.
-If interrupted, training can be resumed with:
+This will run and regularly dump Leela Zero weight files (of networks with 6
+blocks and 128 filters) to disk, as well as snapshots of the learning state
+numbered by the batch number. If interrupted, training can be resumed with:
 
-    training/tf/parse.py train.out leelaz-model-batchnumber
+    training/tf/parse.py 6 128 train.out leelaz-model-batchnumber
 
 # Todo
 

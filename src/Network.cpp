@@ -152,7 +152,7 @@ void Network::benchmark(const GameState* const state, const int iterations) {
 
 template<class container>
 void process_bn_var(container& weights) {
-    constexpr float epsilon = 1e-5f;
+    constexpr auto epsilon = 1e-5f;
     for (auto&& w : weights) {
         w = 1.0f / std::sqrt(w + epsilon);
     }
@@ -1036,4 +1036,12 @@ void Network::nncache_resize(int max_count) {
 
 void Network::nncache_clear() {
     m_nncache.clear();
+}
+
+void Network::drain_evals() {
+    m_forward->drain();
+}
+
+void Network::resume_evals() {
+    m_forward->resume();
 }
